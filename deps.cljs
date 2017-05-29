@@ -1,0 +1,1 @@
+{:libs ["muancefx/interop.js"]}
