@@ -2,7 +2,10 @@
   (:require [clojure.string :as string]
             [cljs.analyzer :as ana]
             [cljs.repl])
-  (:import [cljs.tagged_literals JSValue]))
+  (:import [cljs.tagged_literals JSValue]
+           [muancefx JUtils]
+           [clojure.lang RT]
+           [java.beans PropertyDescriptor]))
 
 (defonce typeid (atom 1))
 (defonce comp-typeid (atom -1))
@@ -42,9 +45,8 @@
               clj-var (resolve var)]
           (cond (::tag (meta clj-var))
                 (compile-element-macro env (::tag (meta clj-var)) nil (rest form))
-                (= #'text clj-var) `(muance.core/text-node (cljs.core/str ~@(rest form)))
                 :else form))
-        (string? form) `(muance.core/text-node ~form)
+        (string? form) `(muancefx.core/text ~form)
         :else form))
 
 (defn- local-dep [{name :name fn-var :fn-var
@@ -87,10 +89,40 @@
         (symbol? x) (static-symbol? env x)
         :else false))
 
+;; Like clojure.string/capitalize but do not lowercase other letters
+(defn ^String capitalize [^CharSequence s]
+  (let [s (.toString s)]
+    (if (< (count s) 2)
+      (.toUpperCase s)
+      (str (.toUpperCase (subs s 0 1)) (subs s 1)))))
+
 (defn- as-str [x]
   (cond (string? x) x
         (keyword? x) (name x)
         :else `(cljs.core/str ~x)))
+
+(defn as-property [class-name property]
+  (let [property-method (str (name property) "Property")
+        property-method-name (->> (.getMethods
+                                   (Class/forName class-name false (RT/baseLoader)))
+                                  (into [])
+                                  (filter #(.startsWith (.getName %) property-method))
+                                  first)]
+    (when property-method-name (.getName property-method-name))))
+
+(defn- property-with-on [property]
+  (->> (name property) capitalize (str "on")))
+
+(defn- as-on-property [class-name property]
+  (as-property class-name (property-with-on property)))
+
+(comment
+  (as-property "javafx.scene.control.TextField" "onAction")
+  (as-on-property "javafx.scene.control.TextField" :action)
+
+  (as-property "javafx.scene.control.Button" :onMouseClicked)
+  (as-on-property "javafx.scene.control.Button" :mouseClicked)
+  )
 
 (def ^{:private true} props-to-rename
   {:class :className
@@ -152,6 +184,24 @@
              `(style ~(as-str k) ~v))))
        style))
 
+(defn- format-style-entry [[k v]]
+  (if (string? v)
+    [(str (name k) ":") (str v) ";"]
+    [(str (name k) ":") `(cljs.core/str ~v) ";"]))
+
+(defn- style-map->arr [style-map]
+  (-> (mapcat format-style-entry style-map)
+      (conj `cljs.core/array)))
+
+(comment
+  (style-map->arr {:display "block"
+                   :height 'x
+                   :width "33px"})
+  (style-map->arr {})
+
+  (style-map->arr {:display nil})
+  )
+
 ;; Wrap event handlers in a var when in dev compilation mode in order to enable the possibility
 ;; to dynamically redefine event handler functions definition
 (defn- maybe-wrap-in-var [env f]
@@ -160,31 +210,33 @@
     `(cljs.core/Var. (cljs.core/fn [] ~f) ~f nil)
     f))
 
-(defn- on-calls [env ons]
+(defn- on-calls [env tag ons]
   (let [static? (partial static? env)
         ons (if (handler? ons) [ons] ons)]
     (map (fn [[k f & args]]
-           (if (and (static? f) (every? static? args))
-             (let [l (count args)]
-               (cond (= 0 l) `(on-static ~(as-str k) ~(maybe-wrap-in-var env f))
-                     (= 1 l) `(on-static1 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                          ~(nth args 0))
-                     (= 2 l) `(on-static2 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                          ~(nth args 0) ~(nth args 1))
-                     :else `(on-static3 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                        ~(nth args 0)
-                                        ~(nth args 1)
-                                        ~(nth args 2))))
-             (let [l (count args)]
-               (cond (= 0 l) `(on ~(as-str k) ~(maybe-wrap-in-var env f))
-                     (= 1 l) `(on1 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                   ~(nth args 0))
-                     (= 2 l) `(on2 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                   ~(nth args 0) ~(nth args 1))
-                     :else `(on3 ~(as-str k) ~(maybe-wrap-in-var env f)
-                                 ~(nth args 0)
-                                 ~(nth args 1)
-                                 ~(nth args 2))))))
+           (let [property-name (as-on-property tag k)]
+             (assert property-name (str (property-with-on k) " is not a property of " tag))
+             (if (and (static? f) (every? static? args))
+               (let [l (count args)]
+                 (cond (= 0 l) `(on-static ~(as-on-property tag k) ~(maybe-wrap-in-var env f))
+                       (= 1 l) `(on-static1 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                            ~(nth args 0))
+                       (= 2 l) `(on-static2 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                            ~(nth args 0) ~(nth args 1))
+                       :else `(on-static3 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                          ~(nth args 0)
+                                          ~(nth args 1)
+                                          ~(nth args 2))))
+               (let [l (count args)]
+                 (cond (= 0 l) `(on ~(as-on-property tag k) ~(maybe-wrap-in-var env f))
+                       (= 1 l) `(on1 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                     ~(nth args 0))
+                       (= 2 l) `(on2 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                     ~(nth args 0) ~(nth args 1))
+                       :else `(on3 ~(as-on-property tag k) ~(maybe-wrap-in-var env f)
+                                   ~(nth args 0)
+                                   ~(nth args 1)
+                                   ~(nth args 2)))))))
          ons)))
 
 (defn- attribute-calls [env tag attrs]
@@ -192,36 +244,29 @@
             (cond
               (= k ::key) calls
               (= k ::hooks) calls
-              (= k :className) (conj calls (class-call env v))
-              (= k :style) (into calls (style-calls env v))
-              (= k ::on)  (into calls (on-calls env v))
-              (and (= tag "input") (= k :value))
+              (= k :styleClass) (if (vector? v)
+                                  (if (every? (partial static? env) v)
+                                    (conj calls `(style-classes-static ~v))
+                                    (conj calls `(style-classes ~v)))
+                                  (if (static? env v)
+                                    (conj calls `(style-class-static ~v))
+                                    (conj calls `(style-class ~v))))
+              (= k :style) (let [style-call (style-map->arr v)
+                                 property-name (as-property tag :style)]
+                             (assert property-name (str "style is not a property of " tag))
+                             (if (every? (partial static? env) (rest style-call))
+                               (conj calls `(style-static ~property-name ~style-call))
+                               (conj calls `(style ~property-name ~style-call))))
+              (= k ::on) (into calls (on-calls env tag v))
+              (and (JUtils/isAssignableFromTextField tag) (= (name k) "text"))
               (conj calls (if (static? env v)
-                            `(prop-static "value" ~v)
+                            `(prop-static ~(as-property tag k) ~v)
                             `(input-value ~v)))
-              (string/starts-with? (str k) ":xlink")
-              (conj calls (if (static? env v)
-                            `(attr-ns-static xlink-ns ~(as-str k) ~v)
-                            `(attr-ns xlink-ns ~(as-str k) ~v)))
-              (string/starts-with? (str k) ":xml")
-              (conj calls (if (static? env v)
-                            `(attr-ns-static xml-ns ~(as-str k) ~v)
-                            `(attr-ns xml-ns ~(as-str k) ~v)))
-              (string/starts-with? (str k) ":data-")
-              (conj calls (if (static? env v)
-                            `(attr-ns-static nil ~(as-str k) ~v)
-                            `(attr-ns nil ~(as-str k) ~v)))
-              (string/starts-with? (str k) ":aria-")
-              (conj calls (if (static? env v)
-                            `(attr-ns-static nil ~(as-str k) ~v)
-                            `(attr-ns nil ~(as-str k) ~v)))
-              (= "muance.attribute" (namespace k))
-              (conj calls (if (static? env v)
-                            `(attr-ns-static nil ~(as-str k) ~v)
-                            `(attr-ns nil ~(as-str k) ~v)))
-              :else (conj calls (if (static? env v)
-                                  `(prop-static ~(as-str k) ~v)
-                                  `(prop ~(as-str k) ~v)))))
+              :else (let [property-name (as-property tag k)]
+                      (assert property-name (str (name k) " is not a property of " tag))
+                      (conj calls (if (static? env v)
+                                    `(prop-static ~property-name ~v)
+                                    `(prop ~property-name ~v))))))
           '() attrs))
 
 (defn- with-svg-namespace [tag body]
@@ -251,11 +296,27 @@
         ~@(map compile-form body)
         (close ~did-mount ~did-update)))))
 
-(defmacro text
-  "Creates a text node. The text node value is the string concatenation of the text macro 
-  arguments."
-  [& text]
-  `(muance.core/text-node (cljs.core/str ~@text)))
+(defn- compile-text-macro
+  [env tag typeid body]
+  (let [{key ::key
+         {will-update :will-update will-unmount :will-unmount
+          remove-hook :remove-hook
+          did-mount :did-mount did-update :did-update} ::hooks :as attrs} (attributes body)
+        _ (validate-attributes attrs)
+        body (body-without-attributes body attrs)]
+    `(do
+       (open ~tag ~typeid ~key ~will-update ~will-unmount ~remove-hook)
+       ~@(attribute-calls env tag attrs)
+       ~@(attribute-calls env tag {:text (apply str body)})
+       (close ~did-mount ~did-update))))
+
+(defmacro ^:private make-text-macro
+  [name tag]
+  `(defmacro ~(with-macro-meta name tag) [~'& ~'body]
+     (swap! typeid inc-typeid)
+     (compile-text-macro ~'&env ~(str tag) @typeid ~'body)))
+
+(make-text-macro text javafx.scene.text.Text)
 
 (defn- with-macro-meta [name tag]
   (with-meta name (assoc (meta name) ::tag (str tag))))
@@ -359,3 +420,7 @@
   `(let [runnable# (js/Java.extend muancefx.core/Runnable
                                    (cljs.core/js-obj "run" (cljs.core/fn [] ~@body)))]
      (.runLater muancefx.core/Platform (new runnable#))))
+
+;; call a muancefx compile-element-macro from muancefx.h
+;; no svg
+;; custom attribute-calls

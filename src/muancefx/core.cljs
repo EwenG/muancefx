@@ -17,6 +17,7 @@
 (def StackPane (js/Java.type "javafx.scene.layout.StackPane"))
 (def Scene (js/Java.type "javafx.scene.Scene"))
 (def Group (js/Java.type "javafx.scene.Group"))
+(def String (js/Java.type "java.lang.String"))
 
 (defn show-w []
   (.setTitle stage "Hello World")
@@ -469,17 +470,32 @@
       (.setAttributeNS node ns key val))))
 
 (defn- set-property [node ns key val]
-  (interop/invoke node key val))
+  (.setValue (interop/invokePropertyGetter node key) val))
 
 (defn- set-input-value [node ns key val]
-  (when (not= (o/get node key) val)
-    (o/set node key val)))
+  (let [prop (interop/invokePropertyGetter node key)]
+    (when (not= (.getValue prop) val)
+      (.setValue prop val))))
 
 (defn- set-style [node ns key val]
   (o/set (.-style node) key val))
 
 (defn- set-style-custom [node ns key val]
   (.setProperty (.-style node) key val))
+
+(defn- set-class [node ns key val]
+  (let [style-class (.getStyleClass node)]
+    (.clear style-class)
+    (.add style-class val)))
+
+(defn- set-classes [node ns key val]
+  (let [style-class (.getStyleClass node)]
+    (.clear style-class)
+    (let [l (.-length val)]
+      (loop [i 0]
+        (when (< i l)
+          (.add style-class (aget val i))
+          (recur (inc i)))))))
 
 (defn- init-keymap [keymap]
   (aset *vnode* index-keymap keymap)
@@ -750,11 +766,9 @@
     (set! *attrs-count* (inc *attrs-count*))))
 
 (defn- handle-event-handlers [attrs attrs-index key handler f]
-  (let [node (aget *vnode* index-node)]
-    (when-let [prev-handler (aget attrs attrs-index)]
-      (.removeEventListener node key prev-handler false))
-    (when handler
-      (.addEventListener node key handler false))
+  (let [node (aget *vnode* index-node)
+        property-getter (interop/invokePropertyGetter node key)]
+    (.setValue property-getter handler)
     (aset attrs attrs-index handler)
     (aset attrs (inc attrs-index) f)))
 
@@ -765,26 +779,38 @@
     (when (nil? (aget *vnode* index-attrs))
       (aset *vnode* index-attrs prev-attrs))
     (cond (and (= 0 param-count) (not= prev-f f))
-          (let [handler (when (fn? f) (fn [e] (f e state-ref)))]
-            (handle-event-handlers prev-attrs *attrs-count* key handler f))
+          (let [handler-class (when (fn? f)
+                                (js/Java.extend
+                                 EventHandler
+                                 #js {:handle (fn [e] (f e state-ref))}))]
+            (handle-event-handlers prev-attrs *attrs-count* key (handler-class.) f))
           (and (= 1 param-count) (or (not= prev-f f)
                                      (not= param1 (aget prev-attrs (+ *attrs-count* 2)))))
-          (let [handler (when (fn? f) (fn [e] (f e state-ref param1)))]
-            (handle-event-handlers prev-attrs *attrs-count* key handler f)
+          (let [handler-class (when (fn? f)
+                                (js/Java.extend
+                                 EventHandler
+                                 #js {:handle (fn [e] (f e state-ref param1))}))]
+            (handle-event-handlers prev-attrs *attrs-count* key (handler-class.) f)
             (aset prev-attrs (+ *attrs-count* 2) param1))
           (and (= 2 param-count) (or (not= prev-f f)
                                      (not= param1 (aget prev-attrs (+ *attrs-count* 2)))
                                      (not= param2 (aget prev-attrs (+ *attrs-count* 3)))))
-          (let [handler (when (fn? f) (fn [e] (f e state-ref param1 param2)))]
-            (handle-event-handlers prev-attrs *attrs-count* key handler f)
+          (let [handler-class (when (fn? f)
+                                (js/Java.extend
+                                 EventHandler
+                                 #js {:handle (fn [e] (f e state-ref param1 param2))}))]
+            (handle-event-handlers prev-attrs *attrs-count* key (handler-class.) f)
             (aset prev-attrs (+ *attrs-count* 2) param1)
             (aset prev-attrs (+ *attrs-count* 3) param2))
           (and (= 3 param-count) (or (not= prev-f f)
                                      (not= param1 (aget prev-attrs (+ *attrs-count* 2)))
                                      (not= param2 (aget prev-attrs (+ *attrs-count* 3)))
                                      (not= param3 (aget prev-attrs (+ *attrs-count* 4)))))
-          (let [handler (when (fn? f) (fn [e] (f e state-ref param1 param2 param3)))]
-            (handle-event-handlers prev-attrs *attrs-count* key handler f)
+          (let [handler-class (when (fn? f)
+                                (js/Java.extend
+                                 EventHandler
+                                 #js {:handle (fn [e] (f e state-ref param1 param2 param3))}))]
+            (handle-event-handlers prev-attrs *attrs-count* key (handler-class.) f)
             (aset prev-attrs (+ *attrs-count* 2) param1)
             (aset prev-attrs (+ *attrs-count* 3) param2)
             (aset prev-attrs (+ *attrs-count* 4) param3)))
@@ -842,16 +868,43 @@
     (let [node (aget *vnode* index-node)]
       (set-property node nil key val))))
 
+(defn- style-class [c]
+  (attr-impl nil "styleClass" c set-class))
+
+(defn- style-class-static [c]
+  (when (and (> *new-node* 0) (not (nil? c)))
+    (let [node (aget *vnode* index-node)]
+      (set-class node nil "styleClass" c))))
+
+(defn- style-classes [classes]
+  (attr-impl nil "styleClass" classes set-classes))
+
+(defn- style-classes-static [classes]
+  (when (and (> *new-node* 0) (not (nil? classes)))
+    (let [node (aget *vnode* index-node)]
+      (set-classes node nil "styleClass" classes))))
+
 (defn- input-value [val]
-  (attr-impl nil "value" (when (not (nil? val)) (str val)) set-input-value))
+  (attr-impl nil "textProperty" (when (not (nil? val)) (str val)) set-input-value))
+
+(defn- style-remove-nils! [style-arr i l]
+  (when (< i l)
+    (let [v (aget style-arr (inc i))]
+      (when (= (.trim v) "")
+        (aset style-arr i "")
+        (aset style-arr (inc i) "")
+        (aset style-arr (+ i 2) "")))
+    (recur style-arr (+ i 3) l)))
 
 (defn- style [key val]
-  (attr-impl nil key (str val) set-style))
+  (style-remove-nils! val 0 (.-length val))
+  (attr-impl nil key (.join String "" val) set-property))
 
 (defn- style-static [key val]
-  (when (and (> *new-node* 0) (not (nil? val)))
+  (style-remove-nils! val 0 (.-length val))
+  (when (and (> *new-node* 0) (not= 0 (.-length val)))
     (let [node (aget *vnode* index-node)]
-      (set-style node nil key (str val)))))
+      (set-property node nil key (.join String "" val)))))
 
 (defn- style-custom [key val]
   (attr-impl nil key (str val) set-style-custom))
