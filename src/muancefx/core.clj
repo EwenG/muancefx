@@ -310,6 +310,9 @@
        ~@(attribute-calls env tag {:text (apply str body)})
        (close ~did-mount ~did-update))))
 
+(defn- with-macro-meta [name tag]
+  (with-meta name (assoc (meta name) ::tag (str tag))))
+
 (defmacro ^:private make-text-macro
   [name tag]
   `(defmacro ~(with-macro-meta name tag) [~'& ~'body]
@@ -317,9 +320,6 @@
      (compile-text-macro ~'&env ~(str tag) @typeid ~'body)))
 
 (make-text-macro text javafx.scene.text.Text)
-
-(defn- with-macro-meta [name tag]
-  (with-meta name (assoc (meta name) ::tag (str tag))))
 
 (defmacro make-element-macro
   "Defines a new HTML element macro with the provided tag. The newly defined HTML element macro
