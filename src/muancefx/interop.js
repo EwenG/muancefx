@@ -7,3 +7,7 @@ goog.provide('muancefx.interop');
 muancefx.interop.invokePropertyGetter = function(obj, methodName) {
   return obj[methodName]();
 };
+
+muancefx.interop.invokePropertySetter = function(obj, methodName, val) {
+  return obj[methodName](val);
+};
