@@ -262,4 +262,3 @@
 
 ;; more h macros
 ;; remove core things
-;; set-timeout / set-interval

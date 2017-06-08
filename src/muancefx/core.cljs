@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [remove key])
   (:require [muance.core :as m]
             [goog.object :as o]
-            [muancefx.interop :as interop])
+            [muancefx.interop :as interop]
+            [muancefx.utils :as utils])
   (:require-macros [muancefx.core :refer [run-later]]))
 
 (def Platform (js/Java.type "javafx.application.Platform"))
@@ -101,21 +102,21 @@
   (assert vnode "muancefx.core/key expects a vnode.")
   (aget vnode m/index-key))
 
-#_(defn set-timeout
+(defn set-timeout
   "Execute f after a delay expressed in milliseconds. The first argument of f is the local state reference of the vnode component."
   [vnode f millis]
-  (assert vnode "muance.core/set-timeout expects a vnode.")
-  (let [component (if (component? vnode) vnode (aget vnode index-component))
-        state-ref (aget component index-comp-data index-comp-data-state-ref)]
-    (.setTimeout js/window (fn [] (f state-ref)) millis)))
+  (assert vnode "muancefx.core/set-timeout expects a vnode.")
+  (let [component (if (m/component? vnode) vnode (aget vnode m/index-component))
+        state-ref (aget component m/index-comp-data m/index-comp-data-state-ref)]
+    (utils/set-timeout (fn [] (f state-ref)) millis)))
 
-#_(defn set-interval
+(defn set-interval
   "Periodically execute f. The period is expressed in milliseconds. The first argument of f is the local state reference of the vnode component."
   [vnode f millis]
-  (assert vnode "muance.core/set-timeout expects a vnode.")
-  (let [component (if (component? vnode) vnode (aget vnode index-component))
-        state-ref (aget component index-comp-data index-comp-data-state-ref)]
-    (.setInterval js/window (fn [] (f state-ref)) millis)))
+  (assert vnode "muancefx.core/set-timeout expects a vnode.")
+  (let [component (if (m/component? vnode) vnode (aget vnode m/index-component))
+        state-ref (aget component m/index-comp-data m/index-comp-data-state-ref)]
+    (utils/set-interval (fn [] (f state-ref)) millis)))
 
 (defn remove-node
   "Remove a javafx node. Do nothing if the node has no parent."

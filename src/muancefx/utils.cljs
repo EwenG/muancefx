@@ -2,8 +2,19 @@
 
 (def Timer (js/Java.type "java.util.Timer"))
 
-(def timer (Timer. "setTimeout" true))
-
 (defn set-timeout [f millis]
-  (.schedule timer f millis))
+  (let [timer (Timer. "setTimeout" true)]
+    (.schedule timer f millis)
+    timer))
+
+(defn clear-timeout [timer]
+  (.cancel timer))
+
+(defn set-interval [f millis]
+  (let [timer (Timer. "setInterval" true)]
+    (.schedule timer f millis millis)
+    timer))
+
+(defn clear-interval [timer]
+  (.cancel timer))
 
