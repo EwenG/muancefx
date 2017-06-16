@@ -238,7 +238,7 @@
       (handle-event-handler node key nil (make-handler-fn-3 f state-ref attr1 attr2 attr3)))))
 
 (defn- prop [key val]
-  (m/attr-impl nil key val set-property))
+  (m/attr-impl m/*vnode* nil key val set-property))
 
 (defn- prop-static [key val]
   (when (and (> m/*new-node* 0) (not (nil? val)))
@@ -246,7 +246,7 @@
       (set-property node nil key val))))
 
 (defn- style-class [c]
-  (m/attr-impl nil "styleClass" c set-class))
+  (m/attr-impl m/*vnode* nil "styleClass" c set-class))
 
 (defn- style-class-static [c]
   (when (and (> m/*new-node* 0) (not (nil? c)))
@@ -254,7 +254,7 @@
       (set-class node nil "styleClass" c))))
 
 (defn- style-classes [classes]
-  (m/attr-impl nil "styleClass" classes set-classes))
+  (m/attr-impl m/*vnode* nil "styleClass" classes set-classes))
 
 (defn- style-classes-static [classes]
   (when (and (> m/*new-node* 0) (not (nil? classes)))
@@ -262,7 +262,7 @@
       (set-classes node nil "styleClass" classes))))
 
 (defn- input-value [val]
-  (m/attr-impl nil nil (when (not (nil? val)) (str val)) set-input-value))
+  (m/attr-impl m/*vnode* nil nil (when (not (nil? val)) (str val)) set-input-value))
 
 (defn- style-remove-nils! [style-arr i l]
   (when (< i l)
@@ -275,7 +275,7 @@
 
 (defn- style [key val]
   (style-remove-nils! val 0 (.-length val))
-  (m/attr-impl nil key (.join String "" val) set-property))
+  (m/attr-impl m/*vnode* nil key (.join String "" val) set-property))
 
 (defn- style-static [key val]
   (style-remove-nils! val 0 (.-length val))
