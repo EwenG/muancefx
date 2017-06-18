@@ -41,6 +41,10 @@
                                   first)]
     (when property-method-name (.getName property-method-name))))
 
+(defn- as-property [class-name property]
+  (let [property-method-name (str (name property) "Property")]
+    (property-method class-name property-method-name)))
+
 (defn- as-property-setter [class-name property]
   (let [property-method-name (property-with-prefix "set" property)]
     (property-method class-name property-method-name)))
@@ -112,6 +116,43 @@
                                    ~(nth args 2)))))))
          ons)))
 
+(defn- listen-calls [env tag listeners]
+  (let [static? (partial #'m/static? env #{local-state-sym})
+        listeners (if (#'m/handler? listeners) [listeners] listeners)]
+    (map (fn [[k f & args]]
+           (let [property-name (as-property tag k)]
+             (assert property-name (str (name k) " is not a property of " tag))
+             (if (and (static? f) (every? static? args))
+               (let [l (count args)]
+                 (cond (= 0 l) `(listen-static ~(as-property tag k)
+                                               ~(#'m/maybe-wrap-in-var env f))
+                       (= 1 l) `(listen-static1 ~(as-property tag k)
+                                                ~(#'m/maybe-wrap-in-var env f)
+                                                ~(nth args 0))
+                       (= 2 l) `(listen-static2 ~(as-property tag k)
+                                                ~(#'m/maybe-wrap-in-var env f)
+                                                ~(nth args 0) ~(nth args 1))
+                       :else `(listen-static3 ~(as-property tag k)
+                                              ~(#'m/maybe-wrap-in-var env f)
+                                              ~(nth args 0)
+                                              ~(nth args 1)
+                                              ~(nth args 2))))
+               (let [l (count args)]
+                 (cond (= 0 l) `(listen ~(as-property tag k)
+                                        ~(#'m/maybe-wrap-in-var env f))
+                       (= 1 l) `(listen1 ~(as-property tag k)
+                                         ~(#'m/maybe-wrap-in-var env f)
+                                         ~(nth args 0))
+                       (= 2 l) `(listen2 ~(as-property tag k)
+                                         ~(#'m/maybe-wrap-in-var env f)
+                                         ~(nth args 0) ~(nth args 1))
+                       :else `(listen3 ~(as-property tag k)
+                                       ~(#'m/maybe-wrap-in-var env f)
+                                       ~(nth args 0)
+                                       ~(nth args 1)
+                                       ~(nth args 2)))))))
+         listeners)))
+
 (defn- attribute-calls [env tag attrs]
   (reduce (fn [calls [k v]]
             (cond
@@ -132,6 +173,7 @@
                                (conj calls `(style-static ~property-name ~style-call))
                                (conj calls `(style ~property-name ~style-call))))
               (= k ::on) (into calls (on-calls env tag v))
+              (= k ::listen) (into calls (listen-calls env tag v))
               (and (JUtils/isAssignableFromTextField tag) (= (name k) "text"))
               (conj calls (if (#'m/static? env #{local-state-sym} v)
                             `(prop-static ~(as-property-setter tag k) ~v)
@@ -214,17 +256,17 @@
         body (if (string? docstring-or-params) (rest params-body) params-body)
         key-sym (gensym "key")]
     `(defn ~name
-       ~(if #'m/params-with-props
+       ~(if params-with-props
           `([~props-sym]
             (~name nil ~props-sym))
           `([]
             (~name nil)))
-       (~(if #'m/params-with-props [key-sym params-with-props] [key-sym])
+       (~(if params-with-props [key-sym params-with-props] [key-sym])
         (cljs.core/let [parent-component# m/*component*
                         hooks# (goog.object/get m/comp-hooks ~(str ana/*cljs-ns* "/" name))]
           (open-comp ~(str ana/*cljs-ns* "/" name)
-                     ~typeid ~(boolean #'m/params-with-props)
-                     ~(when #'m/params-with-props props-sym)
+                     ~typeid ~(boolean params-with-props)
+                     ~(when params-with-props props-sym)
                      ~name ~key-sym hooks#)
           (cljs.core/when-not m/*skip*
             ~@body)
@@ -256,9 +298,7 @@
                          ~remove-hook ~will-update)))))
 
 (defmacro run-later [& body]
-  `(let [runnable# (js/Java.extend muancefx.core/Runnable
-                                   (cljs.core/js-obj "run" (cljs.core/fn [] ~@body)))]
-     (.runLater muancefx.core/Platform (new runnable#))))
+  `(async-fn (cljs.core/fn [] ~@body)))
 
 ;; more h macros
 ;; remove core things

@@ -13,15 +13,14 @@
 (defonce stage nil)
 (def started-promise (CompletableFuture.))
 
-#_(def Button (js/Java.type "javafx.scene.control.Button"))
-(def Stage (js/Java.type "javafx.stage.Stage"))
 (def EventHandler (js/Java.type "javafx.event.EventHandler"))
+(def ChangeListener (js/Java.type "javafx.beans.value.ChangeListener"))
 (def StackPane (js/Java.type "javafx.scene.layout.StackPane"))
 (def Scene (js/Java.type "javafx.scene.Scene"))
 (def Group (js/Java.type "javafx.scene.Group"))
 (def String (js/Java.type "java.lang.String"))
 
-(defn show-w []
+(defn- show-w []
   (.setTitle stage "Hello World")
   (let [root (StackPane.)
         Button (js/Java.type "javafx.scene.control.Button")
@@ -33,7 +32,7 @@
     (prn (str (.getChildren root)))
     (.show stage)))
 
-(defn start [s]
+(defn- start [s]
   (set! stage s)
   (.complete started-promise s))
 
@@ -50,27 +49,16 @@
 
 (defn ^:export start-my-app []
   (start-app)
-  (run-later (show-w)))
+  (async-fn (fn [] (show-w))))
 
-(comment
-  (do (.setImplicitExit Platform false)
-      (str (start-app)))
-
-  (run-later (show-w))
-  
-  (.launch Application
-           (.getClass my-application)
-           (js/Java.to [] "java.lang.String[]"))
-
-  (run-later (prn "e"))
-  )
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defn state []
-  (assert (not (nil? m/*component*)) (str "muancefx.core/state was called outside a render loop"))
+  (assert (not (nil? m/*vnode*)) (str "muancefx.core/state was called outside a render loop"))
   m/*state*)
 
 (defn vnode []
-  (assert (not (nil? m/*component*)) (str "muancefx.core/vnode was called outside a render loop"))
+  (assert (not (nil? m/*vnode*)) (str "muancefx.core/vnode was called outside a render loop"))
   m/*vnode*)
 
 (defn component-name
@@ -162,35 +150,82 @@
       (c.))))
 
 (defn- handle-event-handler [node key prev-handler handler]
-  (interop/invokePropertySetter node key handler))
+  (when handler
+    (interop/invokePropertySetter node key handler)))
 
 (defn- make-handler-fn-0 [f state-ref]
-  (let [handler-class (js/Java.extend
-                       EventHandler
-                       #js {:handle
-                            (fn [e] (f e state-ref))})]
-    (handler-class.)))
+  (when (fn? f)
+    (let [handler-class (js/Java.extend
+                         EventHandler
+                         #js {:handle
+                              (fn [e] (f e state-ref))})]
+      (handler-class.))))
 
 (defn- make-handler-fn-1 [f state-ref param1]
-  (let [handler-class (js/Java.extend
-                       EventHandler
-                       #js {:handle
-                            (fn [e] (f e state-ref param1))})]
-    (handler-class.)))
+  (when (fn? f)
+    (let [handler-class (js/Java.extend
+                         EventHandler
+                         #js {:handle
+                              (fn [e] (f e state-ref param1))})]
+      (handler-class.))))
 
 (defn- make-handler-fn-2 [f state-ref param1 param2]
-  (let [handler-class (js/Java.extend
-                       EventHandler
-                       #js {:handle
-                            (fn [e] (f e state-ref param1 param2))})]
-    (handler-class.)))
+  (when (fn? f)
+    (let [handler-class (js/Java.extend
+                         EventHandler
+                         #js {:handle
+                              (fn [e] (f e state-ref param1 param2))})]
+      (handler-class.))))
 
 (defn- make-handler-fn-3 [f state-ref param1 param2 param3]
-  (let [handler-class (js/Java.extend
-                       EventHandler
-                       #js {:handle
-                            (fn [e] (f e state-ref param1 param2 param3))})]
-    (handler-class.)))
+  (when (fn? f)
+    (let [handler-class (js/Java.extend
+                         EventHandler
+                         #js {:handle
+                              (fn [e] (f e state-ref param1 param2 param3))})]
+      (handler-class.))))
+
+(defn- handle-listener [node key prev-listener listener]
+  (when prev-listener
+    (.removeListener (interop/invokePropertyGetter node key) prev-listener))
+  (when listener
+    (.addListener (interop/invokePropertyGetter node key) listener)))
+
+(defn- make-listener-fn-0 [f state-ref]
+  (when (fn? f)
+    (let [listener-class (js/Java.extend
+                          ChangeListener
+                          #js {:changed
+                               (fn [observabled o n] (f o n state-ref))})]
+      (listener-class.))))
+
+(defn- make-listener-fn-1 [f state-ref param1]
+  (when (fn? f)
+    (let [listener-class (js/Java.extend
+                          ChangeListener
+                          #js {:changed
+                               (fn [observabled o n] (f o n state-ref param1))})]
+      (listener-class.))))
+
+(defn- make-listener-fn-2 [f state-ref param1 param2]
+  (when (fn? f)
+    (let [listener-class (js/Java.extend
+                          ChangeListener
+                          #js {:changed
+                               (fn [observabled o n] (f o n state-ref param1 param2))})]
+      (listener-class.))))
+
+(defn- make-listener-fn-3 [f state-ref param1 param2 param3]
+  (when (fn? f)
+    (let [listener-class (js/Java.extend
+                          ChangeListener
+                          #js {:changed
+                               (fn [observabled o n] (f o n state-ref param1 param2 param3))})]
+      (listener-class.))))
+
+(defn- async-fn [f]
+  (let [runnable (js/Java.extend Runnable (js-obj "run" f))]
+    (.runLater Platform (new runnable))))
 
 (def context-javafx #js {:insert-fn insert-fn-javafx
                          :remove-node-fn remove-node
@@ -199,10 +234,16 @@
                          :make-handler-0 make-handler-fn-0
                          :make-handler-1 make-handler-fn-1
                          :make-handler-2 make-handler-fn-2
-                         :make-handler-3 make-handler-fn-3})
+                         :make-handler-3 make-handler-fn-3
+                         :handle-listener-fn handle-listener
+                         :make-listener-0 make-listener-fn-0
+                         :make-listener-1 make-listener-fn-1
+                         :make-listener-2 make-listener-fn-2
+                         :make-listener-3 make-listener-fn-3
+                         :async-fn async-fn})
 
 (defn- on [key f]
-  (m/on-impl context-javafx key f nil nil nil 0))
+  (m/on-impl context-javafx "handler" key f nil nil nil 0))
 
 (defn- on-static [key f]
   (when (and (> m/*new-node* 0) (fn? f))
@@ -211,7 +252,7 @@
       (handle-event-handler node key nil (make-handler-fn-0 f state-ref)))))
 
 (defn- on1 [key f attr1]
-  (m/on-impl context-javafx key f attr1 nil nil 1))
+  (m/on-impl context-javafx "handler" key f attr1 nil nil 1))
 
 (defn- on-static1 [key f attr1]
   (when (and (> m/*new-node* 0) (fn? f))
@@ -220,7 +261,7 @@
       (handle-event-handler node key nil (make-handler-fn-1 f state-ref attr1)))))
 
 (defn- on2 [key f attr1 attr2]
-  (m/on-impl context-javafx key f attr1 attr2 nil 2))
+  (m/on-impl context-javafx "handler" key f attr1 attr2 nil 2))
 
 (defn- on-static2 [key f attr1 attr2]
   (when (and (> m/*new-node* 0) (fn? f))
@@ -229,13 +270,49 @@
       (handle-event-handler node key nil (make-handler-fn-2 f state-ref attr1 attr2)))))
 
 (defn- on3 [key f attr1 attr2 attr3]
-  (m/on-impl context-javafx key f attr1 attr2 attr3 3))
+  (m/on-impl context-javafx "handler" key f attr1 attr2 attr3 3))
 
 (defn- on-static3 [key f attr1 attr2 attr3]
   (when (and (> m/*new-node* 0) (fn? f))
     (let [node (aget m/*vnode* m/index-node)
           state-ref (aget m/*component* m/index-comp-data m/index-comp-data-state-ref)]
       (handle-event-handler node key nil (make-handler-fn-3 f state-ref attr1 attr2 attr3)))))
+
+(defn- listen [key f]
+  (m/on-impl context-javafx "listener" key f nil nil nil 0))
+
+(defn- listen-static [key f]
+  (when (and (> m/*new-node* 0) (fn? f))
+    (let [node (aget m/*vnode* m/index-node)
+          state-ref (aget m/*component* m/index-comp-data m/index-comp-data-state-ref)]
+      (handle-listener node key nil (make-listener-fn-0 f state-ref)))))
+
+(defn- listen1 [key f attr1]
+  (m/on-impl context-javafx "listener" key f attr1 nil nil 1))
+
+(defn- listen-static1 [key f attr1]
+  (when (and (> m/*new-node* 0) (fn? f))
+    (let [node (aget m/*vnode* m/index-node)
+          state-ref (aget m/*component* m/index-comp-data m/index-comp-data-state-ref)]
+      (handle-listener node key nil (make-listener-fn-1 f state-ref attr1)))))
+
+(defn- listen2 [key f attr1 attr2]
+  (m/on-impl context-javafx "listener" key f attr1 attr2 nil 2))
+
+(defn- listen-static2 [key f attr1 attr2]
+  (when (and (> m/*new-node* 0) (fn? f))
+    (let [node (aget m/*vnode* m/index-node)
+          state-ref (aget m/*component* m/index-comp-data m/index-comp-data-state-ref)]
+      (handle-listener node key nil (make-listener-fn-2 f state-ref attr1 attr2)))))
+
+(defn- listen3 [key f attr1 attr2 attr3]
+  (m/on-impl context-javafx "listener" key f attr1 attr2 attr3 3))
+
+(defn- listen-static3 [key f attr1 attr2 attr3]
+  (when (and (> m/*new-node* 0) (fn? f))
+    (let [node (aget m/*vnode* m/index-node)
+          state-ref (aget m/*component* m/index-comp-data m/index-comp-data-state-ref)]
+      (handle-listener node key nil (make-listener-fn-3 f state-ref attr1 attr2 attr3)))))
 
 (defn- prop [key val]
   (m/attr-impl m/*vnode* nil key val set-property))
@@ -315,11 +392,11 @@
         (when-not (aget render-queue m/index-render-queue-dirty-flag)
           (aset render-queue m/index-render-queue-dirty-flag true)
           (if async
-            (run-later (m/process-render-queue render-queue))
+            (async-fn (fn [] (m/process-render-queue render-queue)))
             (m/process-render-queue render-queue))))
-      (run-later
-       (m/patch-impl render-queue vnode nil patch-fn props false)
-       (m/process-post-render-hooks render-queue)))))
+      (async-fn (fn []
+                  (m/patch-impl render-queue vnode nil patch-fn props false)
+                  (m/process-post-render-hooks render-queue))))))
 
 ;; id is used to keep track of rendered vtrees, for re-rendering on function/component reload
 (deftype VTree [vnode render-queue id])
