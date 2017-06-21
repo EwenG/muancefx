@@ -33,25 +33,51 @@
 (defn- property-with-prefix [prefix property]
   (->> (name property) capitalize (str prefix)))
 
-(defn- property-method [class-name property-method-name]
-  (let [property-method-name (->> (.getMethods
-                                   (Class/forName class-name false (RT/baseLoader)))
-                                  (into [])
-                                  (filter #(= (.getName %) property-method-name))
-                                  first)]
-    (when property-method-name (.getName property-method-name))))
+(defn- match-property-method? [name params-count method]
+  (and (= (.getName method) name)
+       (= params-count (count (.getParameterTypes method)))))
+
+(defn- property-method [class-name property-method-name params-count]
+  (let [method (->> (.getMethods
+                     (Class/forName class-name false (RT/baseLoader)))
+                    (filter (partial match-property-method?
+                                     property-method-name params-count))
+                    first)]
+    (when method
+      {:name (.getName method)
+       :params (.getParameterTypes method)})))
+
+(comment
+  (import '[javafx.scene.control.ListView])
+  (.getClass javafx.scene.control.ListView)
+
+  (->> (Class/forName "javafx.scene.control.ListView" false (RT/baseLoader))
+       (.getMethods)
+       (map #(.getParameterTypes %))
+       (into [])
+       (take 4))
+
+  (->> (Class/forName "javafx.scene.control.ListView" false (RT/baseLoader))
+       (.getMethods)
+       (filter #(= (.getName %) "setItems"))
+       first
+       (.getParameterTypes)
+       count
+       #_(into []))
+  
+  )
 
 (defn- as-property [class-name property]
   (let [property-method-name (str (name property) "Property")]
-    (property-method class-name property-method-name)))
+    (property-method class-name property-method-name 0)))
 
 (defn- as-property-setter [class-name property]
   (let [property-method-name (property-with-prefix "set" property)]
-    (property-method class-name property-method-name)))
+    (property-method class-name property-method-name 1)))
 
 (defn- as-on-property-setter [class-name property]
   (let [property-method-name (property-with-prefix "setOn" property)]
-    (property-method class-name property-method-name)))
+    (property-method class-name property-method-name 1)))
 
 (comment
   (as-property-setter "javafx.scene.control.TextField" "onAction")
@@ -83,33 +109,33 @@
   (let [static? (partial #'m/static? env #{local-state-sym})
         ons (if (#'m/handler? ons) [ons] ons)]
     (map (fn [[k f & args]]
-           (let [property-name (as-on-property-setter tag k)]
+           (let [property-name (:name (as-on-property-setter tag k))]
              (assert property-name (str (property-with-prefix "setOn" k) " is not a property of " tag))
              (if (and (static? f) (every? static? args))
                (let [l (count args)]
-                 (cond (= 0 l) `(on-static ~(as-on-property-setter tag k)
+                 (cond (= 0 l) `(on-static ~property-name
                                            ~(#'m/maybe-wrap-in-var env f))
-                       (= 1 l) `(on-static1 ~(as-on-property-setter tag k)
+                       (= 1 l) `(on-static1 ~property-name
                                             ~(#'m/maybe-wrap-in-var env f)
                                             ~(nth args 0))
-                       (= 2 l) `(on-static2 ~(as-on-property-setter tag k)
+                       (= 2 l) `(on-static2 ~property-name
                                             ~(#'m/maybe-wrap-in-var env f)
                                             ~(nth args 0) ~(nth args 1))
-                       :else `(on-static3 ~(as-on-property-setter tag k)
+                       :else `(on-static3 ~property-name
                                           ~(#'m/maybe-wrap-in-var env f)
                                           ~(nth args 0)
                                           ~(nth args 1)
                                           ~(nth args 2))))
                (let [l (count args)]
-                 (cond (= 0 l) `(on ~(as-on-property-setter tag k)
+                 (cond (= 0 l) `(on ~property-name
                                     ~(#'m/maybe-wrap-in-var env f))
-                       (= 1 l) `(on1 ~(as-on-property-setter tag k)
+                       (= 1 l) `(on1 ~property-name
                                      ~(#'m/maybe-wrap-in-var env f)
                                      ~(nth args 0))
-                       (= 2 l) `(on2 ~(as-on-property-setter tag k)
+                       (= 2 l) `(on2 ~property-name
                                      ~(#'m/maybe-wrap-in-var env f)
                                      ~(nth args 0) ~(nth args 1))
-                       :else `(on3 ~(as-on-property-setter tag k)
+                       :else `(on3 ~property-name
                                    ~(#'m/maybe-wrap-in-var env f)
                                    ~(nth args 0)
                                    ~(nth args 1)
@@ -120,33 +146,33 @@
   (let [static? (partial #'m/static? env #{local-state-sym})
         listeners (if (#'m/handler? listeners) [listeners] listeners)]
     (map (fn [[k f & args]]
-           (let [property-name (as-property tag k)]
+           (let [property-name (:name (as-property tag k))]
              (assert property-name (str (name k) " is not a property of " tag))
              (if (and (static? f) (every? static? args))
                (let [l (count args)]
-                 (cond (= 0 l) `(listen-static ~(as-property tag k)
+                 (cond (= 0 l) `(listen-static ~property-name
                                                ~(#'m/maybe-wrap-in-var env f))
-                       (= 1 l) `(listen-static1 ~(as-property tag k)
+                       (= 1 l) `(listen-static1 ~property-name
                                                 ~(#'m/maybe-wrap-in-var env f)
                                                 ~(nth args 0))
-                       (= 2 l) `(listen-static2 ~(as-property tag k)
+                       (= 2 l) `(listen-static2 ~property-name
                                                 ~(#'m/maybe-wrap-in-var env f)
                                                 ~(nth args 0) ~(nth args 1))
-                       :else `(listen-static3 ~(as-property tag k)
+                       :else `(listen-static3 ~property-name
                                               ~(#'m/maybe-wrap-in-var env f)
                                               ~(nth args 0)
                                               ~(nth args 1)
                                               ~(nth args 2))))
                (let [l (count args)]
-                 (cond (= 0 l) `(listen ~(as-property tag k)
+                 (cond (= 0 l) `(listen ~property-name
                                         ~(#'m/maybe-wrap-in-var env f))
-                       (= 1 l) `(listen1 ~(as-property tag k)
+                       (= 1 l) `(listen1 ~property-name
                                          ~(#'m/maybe-wrap-in-var env f)
                                          ~(nth args 0))
-                       (= 2 l) `(listen2 ~(as-property tag k)
+                       (= 2 l) `(listen2 ~property-name
                                          ~(#'m/maybe-wrap-in-var env f)
                                          ~(nth args 0) ~(nth args 1))
-                       :else `(listen3 ~(as-property tag k)
+                       :else `(listen3 ~property-name
                                        ~(#'m/maybe-wrap-in-var env f)
                                        ~(nth args 0)
                                        ~(nth args 1)
@@ -166,7 +192,7 @@
                                     (conj calls `(style-class-static ~v))
                                     (conj calls `(style-class ~v))))
               (= k :style) (let [style-call (style-map->arr v)
-                                 property-name (as-property-setter tag :style)]
+                                 property-name (:name (as-property-setter tag :style))]
                              (assert property-name (str "style is not a property of " tag))
                              (if (every? (partial #'m/static? env #{local-state-sym})
                                          (rest style-call))
@@ -176,9 +202,9 @@
               (= k ::listen) (into calls (listen-calls env tag v))
               (and (JUtils/isAssignableFromTextField tag) (= (name k) "text"))
               (conj calls (if (#'m/static? env #{local-state-sym} v)
-                            `(prop-static ~(as-property-setter tag k) ~v)
+                            `(prop-static ~(:name (as-property-setter tag k)) ~v)
                             `(input-value ~v)))
-              :else (let [property-name (as-property-setter tag k)]
+              :else (let [{property-name :name [param-type] :params} (as-property-setter tag k)]
                       (assert property-name (str (name k) " is not a property of " tag))
                       (conj calls (if (#'m/static? env #{local-state-sym} v)
                                     `(prop-static ~property-name ~v)
