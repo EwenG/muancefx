@@ -18,9 +18,15 @@
         (let [var (#'m/cljs-resolve env (first form))
               clj-var (resolve var)]
           (cond (::tag (meta clj-var))
-                (compile-element-macro env (::tag (meta clj-var)) nil (rest form))
+                (compile-element-macro env
+                                       (::tag (meta clj-var))
+                                       nil
+                                       (::children-getter (meta clj-var))
+                                       (::max-children (meta clj-var))
+                                       (rest form))
                 :else form))
-        (string? form) `(muancefx.core/text ~form)
+        (string? form) (compile-element-macro env "javafx.scene.text.Text" nil
+                                              "getChildren" 0 `(:text ~form))
         :else form))
 
 ;; Like clojure.string/capitalize but do not lowercase other letters
@@ -179,6 +185,27 @@
                                        ~(nth args 2)))))))
          listeners)))
 
+(defmulti maybe-cast-param (fn [env property-name param-type property-val]
+                             [property-name param-type]))
+
+(defmethod maybe-cast-param ["setItems" javafx.collections.ObservableList]
+  [env property-name param-type property-val]
+  `(seqable->observable-list ~property-val))
+
+(defmethod maybe-cast-param ["setCellFactory" javafx.util.Callback]
+  [env property-name param-type property-val]
+  (if-let [resolved (and (symbol? property-val) (#'m/cljs-resolve env property-val))]
+    (let [comp-ns (symbol (namespace resolved))
+          comp-sym (symbol (name resolved))
+          var-map (get-in @cljs.env/*compiler* [::ana/namespaces comp-ns :defs comp-sym])]
+      (if (get-in var-map [:meta ::component])
+        `(fn->factory ~(#'m/maybe-wrap-in-var env property-val))
+        property-val))
+    property-val))
+
+(defmethod maybe-cast-param :default [env property-name param-type property-val]
+  property-val)
+
 (defn- attribute-calls [env tag attrs]
   (reduce (fn [calls [k v]]
             (cond
@@ -207,12 +234,16 @@
               :else (let [{property-name :name [param-type] :params} (as-property-setter tag k)]
                       (assert property-name (str (name k) " is not a property of " tag))
                       (conj calls (if (#'m/static? env #{local-state-sym} v)
-                                    `(prop-static ~property-name ~v)
-                                    `(prop ~property-name ~v))))))
+                                    `(prop-static
+                                      ~property-name
+                                      ~(maybe-cast-param env property-name param-type v))
+                                    `(prop
+                                      ~property-name
+                                      ~(maybe-cast-param env property-name param-type v)))))))
           '() attrs))
 
 (defn compile-element-macro
-  [env tag typeid body]
+  [env tag typeid children-getter max-children body]
   (let [compile-form (partial compile-form env)
         {key ::key
          {will-update :will-update will-unmount :will-unmount
@@ -220,40 +251,29 @@
           did-mount :did-mount did-update :did-update} ::hooks :as attrs} (#'m/attributes body)
         _ (#'m/validate-attributes attrs)
         body (#'m/body-without-attributes body attrs)]
-    `(do (open ~tag ~typeid ~key ~will-update ~will-unmount ~remove-hook)
-         ~@(attribute-calls env tag attrs)
-         ~@(map compile-form body)
-         (close ~did-mount ~did-update))))
-
-(defn- compile-text-macro
-  [env tag typeid body]
-  (let [{key ::key
-         {will-update :will-update will-unmount :will-unmount
-          remove-hook :remove-hook
-          did-mount :did-mount did-update :did-update} ::hooks :as attrs} (#'m/attributes body)
-        _ (#'m/validate-attributes attrs)
-        body (#'m/body-without-attributes body attrs)]
-    `(do (open ~tag ~typeid ~key ~will-update ~will-unmount ~remove-hook)
-         ~@(attribute-calls env tag attrs)
-         ~@(attribute-calls env tag {:text (apply str body)})
-         (close ~did-mount ~did-update))))
-
-(defmacro ^:private make-text-macro
-  [name tag]
-  `(defmacro ~(#'m/with-macro-meta name tag) [~'& ~'body]
-     (swap! @#'m/typeid #'m/inc-typeid)
-     (compile-text-macro ~'&env ~(str tag) @@#'m/typeid ~'body)))
-
-(make-text-macro text javafx.scene.text.Text)
+    (assert (or (nil? max-children) (<= (count body) max-children))
+            (str "Too many children for " tag))
+    `(let [prev-children-getter# *children-getter*]
+       (open ~tag ~typeid ~key ~will-update ~will-unmount ~remove-hook)
+       (set! *children-getter* ~children-getter)
+       ~@(attribute-calls env tag attrs)
+       ~@(map compile-form body)
+       (close ~did-mount ~did-update)
+       (set! *children-getter* prev-children-getter#))))
 
 (defmacro make-element-macro
   "Defines a new HTML element macro with the provided tag. The newly defined HTML element macro
   can be used during a Muance vtree patching to create an HTML element which name is the provided
   tag."
-  [name tag]
-  `(defmacro ~(#'m/with-macro-meta name tag) [~'& ~'body]
+  [name tag children-getter max-children]
+  `(defmacro ~(vary-meta name assoc
+                         ::tag (str tag)
+                         ::children-getter (str children-getter)
+                         ::max-children max-children)
+     [~'& ~'body]
      (swap! @#'m/typeid #'m/inc-typeid)
-     (compile-element-macro ~'&env ~(str tag) @@#'m/typeid ~'body)))
+     (compile-element-macro ~'&env ~(str tag) @@#'m/typeid
+                            ~(str children-getter) ~max-children ~'body)))
 
 (defn- refresh-roots [repl-env compiler-env]
   (cljs.repl/-evaluate

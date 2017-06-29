@@ -1,25 +1,30 @@
 (ns muancefx.h
   (:require [muancefx.core :as m]))
 
-(def javafx-nodes {'stack-pane 'javafx.scene.layout.StackPane
-                   'anchor-pane 'javafx.scene.layout.AnchorPane
-                   'v-box 'javafx.scene.layout.VBox
-                   'h-box 'javafx.scene.layout.HBox
-                   'checkbox 'javafx.scene.control.CheckBox
-                   'button 'javafx.scene.control.Button
-                   'text-field 'javafx.scene.control.TextField
-                   'rectangle 'javafx.scene.shape.Rectangle
-                   'text 'javafx.scene.text.Text
-                   'label 'javafx.scene.control.Label
-                   'list-view 'javafx.scene.control.ListView
-                   'toggle-button 'javafx.scene.control.ToggleButton})
+(def javafx-nodes #{{:name 'text :tag 'javafx.scene.text.Text :max-children 0}
+                    {:name 'stack-pane :tag 'javafx.scene.layout.StackPane}
+                    {:name 'anchor-pane :tag 'javafx.scene.layout.AnchorPane}
+                    {:name 'scroll-pane :tag 'javafx.scene.control.ScrollPane
+                     :children-getter "contentProperty" :max-children 1}
+                    {:name 'v-box :tag 'javafx.scene.layout.VBox}
+                    {:name 'h-box :tag 'javafx.scene.layout.HBox}
+                    {:name 'checkbox :tag 'javafx.scene.control.CheckBox}
+                    {:name 'button :tag 'javafx.scene.control.Button}
+                    {:name 'text-field :tag 'javafx.scene.control.TextField}
+                    {:name 'rectangle :tag 'javafx.scene.shape.Rectangle}
+                    {:name 'label :tag 'javafx.scene.control.Label}
+                    {:name 'toggle-button :tag 'javafx.scene.control.ToggleButton}
+                    {:name 'scroll-bar :tag 'javafx.scene.control.ScrollBar}
+                    {:name 'toolbar :tag 'javafx.scene.control.ToolBar}
+                    {:name 'list-view :tag 'javafx.scene.control.ListView :max-children 0}})
 
 (def element-macros javafx-nodes)
 
 (defmacro def-element-macros []
   `(do
-     ~@(for [[name tag] element-macros]
-         `(m/make-element-macro ~name ~tag))))
+     ~@(for [{:keys [name tag children-getter max-children]} element-macros]
+         `(m/make-element-macro
+           ~name ~tag ~(or children-getter "getChildren") ~max-children))))
 
 (def-element-macros)
 

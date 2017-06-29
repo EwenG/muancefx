@@ -19,6 +19,18 @@
 (def Scene (js/Java.type "javafx.scene.Scene"))
 (def Group (js/Java.type "javafx.scene.Group"))
 (def String (js/Java.type "java.lang.String"))
+(def Callback (js/Java.type "muancefx.Callback"))
+(def Double (js/Java.type "java.lang.Double"))
+(def FXCollections (js/Java.type "javafx.collections.FXCollections"))
+
+(def ObservableListClass (.forName java.lang.Class "javafx.collections.ObservableList"))
+(def DefaultPropertyClass (.forName java.lang.Class "javafx.beans.DefaultProperty"))
+
+;; Not all javafx parent node allow setting children through the children property
+;; This var enables the customization of the children property to use
+(def ^:dynamic *children-getter* nil)
+
+(declare async-fn)
 
 (defn- show-w []
   (.setTitle stage "Hello World")
@@ -29,7 +41,6 @@
     (.setScene stage (Scene. root 300 250))
     (.add (.getChildren root) 0 button)
     (.add (.getChildren root) 0 button2)
-    (prn (str (.getChildren root)))
     (.show stage)))
 
 (defn- start [s]
@@ -108,19 +119,34 @@
 
 (defn remove-node
   "Remove a javafx node. Do nothing if the node has no parent."
-  [node]
-  (when-let [p (.getParent node)]
-    (let [children (.getChildren p)
-          index (.indexOf children node)]
-      (when-not (== index -1)
-        (.remove children index)))))
+  [vnode]
+  (let [p-vnode (aget vnode m/index-parent-vnode)
+        p (when p-vnode (m/parent-node p-vnode))
+        node (aget vnode m/index-node)]
+    (when p
+      (let [children (interop/invokePropertyGetter p *children-getter*)]
+        (if (.isInstance ObservableListClass children)
+          (let [index (.indexOf children node)]
+            (when-not (== index -1)
+              (.remove children index)))
+          (if (identical? *children-getter* "rootProperty")
+            ;; Root cannot be nil
+            (.setValue children (Group.))
+            (.setValue children nil)))))))
 
 (defn- insert-fn-javafx [parent-node vnode ref-node]
-  (let [children (.getChildren parent-node)
-        index (.indexOf children ref-node)]
-    (if (== index -1)
-      (.add children (aget vnode m/index-node))
-      (.add children (.indexOf children ref-node) (aget vnode m/index-node)))))
+  (let [p-vnode (aget vnode m/index-parent-vnode)
+        p (when p-vnode (m/parent-node p-vnode))]
+    (when p
+      (let [children (interop/invokePropertyGetter p *children-getter*)]
+        (if (.isInstance ObservableListClass children)
+          (if (nil? ref-node)
+            (.add children (aget vnode m/index-node))
+            (let [index (.indexOf children ref-node)]
+              (if (== index -1)
+                (.add children (aget vnode m/index-node))
+                (.add children index (aget vnode m/index-node)))))
+          (.setValue children (aget vnode m/index-node)))))))
 
 (defn- set-property [node ns key val]
   (interop/invokePropertySetter node key val))
@@ -227,6 +253,10 @@
   (let [runnable (js/Java.extend Runnable (js-obj "run" f))]
     (.runLater Platform (new runnable))))
 
+(defn- patch-fn [render-queue parent-vnode vnode patch-fn maybe-props force-render]
+  (binding [*children-getter* "rootProperty"]
+    (m/patch-impl render-queue parent-vnode vnode patch-fn maybe-props force-render)))
+
 (def context-javafx #js {:insert-fn insert-fn-javafx
                          :remove-node-fn remove-node
                          :create-element-fn create-element
@@ -240,7 +270,8 @@
                          :make-listener-1 make-listener-fn-1
                          :make-listener-2 make-listener-fn-2
                          :make-listener-3 make-listener-fn-3
-                         :async-fn async-fn})
+                         :async-fn async-fn
+                         :patch-fn patch-fn})
 
 (defn- on [key f]
   (m/on-impl context-javafx "handler" key f nil nil nil 0))
@@ -373,34 +404,6 @@
 (defn- close-comp [parent-component hooks]
   (m/close-comp-contextualized context-javafx parent-component hooks))
 
-(defn- patch-root-impl [vtree patch-fn props]
-  ;; Otherwise, set the component at the top as dirty and update its props and patch-fn
-  (let [vnode (.-vnode vtree)
-        render-queue (.-render-queue vtree)
-        async (aget render-queue m/index-render-queue-async)
-        children (aget vnode m/index-children)]
-        ;; comp is nil on first render
-    (if-let [comp (aget children 0)]
-      (do
-        (if-let [dirty-comps (aget render-queue m/index-render-queue-offset)]
-          (do
-            (aset dirty-comps 0 props)
-            (aset dirty-comps 1 patch-fn)
-            (aset dirty-comps 2 comp))
-          (aset render-queue m/index-render-queue-offset #js [props patch-fn comp]))
-        (aset (aget comp m/index-comp-data) m/index-comp-data-dirty-flag true)
-        (when-not (aget render-queue m/index-render-queue-dirty-flag)
-          (aset render-queue m/index-render-queue-dirty-flag true)
-          (if async
-            (async-fn (fn [] (m/process-render-queue render-queue)))
-            (m/process-render-queue render-queue))))
-      (async-fn (fn []
-                  (m/patch-impl render-queue vnode nil patch-fn props false)
-                  (m/process-post-render-hooks render-queue))))))
-
-;; id is used to keep track of rendered vtrees, for re-rendering on function/component reload
-(deftype VTree [vnode render-queue id])
-
 (defn post-render
   "Registers a function to be executed after the next Muancefx render pass. 
   Takes a vnode or vtree, the function to be executed and up to three optional parameters 
@@ -419,34 +422,139 @@
    (m/post-render vnode f arg1 arg2 arg3)))
 
 (defonce ^{:private true} vtree-ids (volatile! 0))
-(defonce ^{:private true} roots #js {})
+(defonce ^{:private true} root (volatile! nil))
 
-(defn- new-root-vnode []
-  #js [nil nil (Group.) nil 0 #js []])
+(defn- new-root-vnode [width height depth-buffer anti-aliasing fill]
+  (let [s (Scene. (Group.) width height depth-buffer anti-aliasing)]
+    (when (some? fill)
+      (.setFill s fill))
+    #js [nil nil s nil 0 #js []]))
+
+(defn- refresh-root [vtree]
+  (let [vnode (.-vnode vtree)
+        render-queue (.-render-queue vtree)
+        children (aget vnode m/index-children)]
+    (when-let [comp (aget children 0)]
+      (run-later
+       (patch-fn render-queue vnode comp
+                 (m/get-comp-render-fn comp)
+                 (aget comp m/index-comp-props)
+                 true)))))
 
 (defn- refresh-roots []
-  (o/forEach roots m/refresh-root))
+  (refresh-root @root))
 
 (defn vtree
   "Creates a new vtree."
-  []
-  (VTree. (new-root-vnode)
-          ;; post render hooks
-          #js [true #js []]
-          (vswap! vtree-ids inc)))
+  [& {:keys [width height depth-buffer anti-aliasing fill]}]
+  (m/VTree. (new-root-vnode width height depth-buffer anti-aliasing fill)
+            #js [true #js [] #js[]]
+            (vswap! vtree-ids inc)))
+
+(defn scene [vtree]
+  (aget (.-vnode vtree) m/index-node))
+
+(defn- patch-root-impl [context vtree patch-fn props]
+  ;; Set the component at the top as dirty and update its props and patch-fn
+  (let [vnode (.-vnode vtree)
+        render-queue (.-render-queue vtree)
+        async (aget render-queue m/index-render-queue-async)
+        children (aget vnode m/index-children)
+        async-fn (o/get context "async-fn")
+        patch-impl (o/get context "patch-fn")]
+    ;; comp is nil on first render
+    (if-let [comp (aget children 0)]
+      (do
+        (if-let [dirty-comps (aget render-queue m/index-render-queue-offset)]
+          (do
+            (aset dirty-comps 0 props)
+            (aset dirty-comps 1 patch-fn)
+            (aset dirty-comps 2 comp))
+          (aset render-queue m/index-render-queue-offset #js [props patch-fn comp]))
+        (aset (aget comp m/index-comp-data) m/index-comp-data-dirty-flag true)
+        (when-not (aget render-queue m/index-render-queue-dirty-flag)
+          (aset render-queue m/index-render-queue-dirty-flag true)
+          (if async
+            (async-fn (fn [] (m/process-render-queue context render-queue)))
+            (m/process-render-queue context render-queue))))
+      (async-fn (fn []
+                  (patch-impl render-queue vnode nil patch-fn props false)
+                  (m/process-post-render-hooks render-queue))))))
+
+(defn- patch-root-impl-sync [context vtree patch-fn props]
+  ;; Set the component at the top as dirty and update its props and patch-fn
+  (let [vnode (.-vnode vtree)
+        render-queue (.-render-queue vtree)
+        children (aget vnode m/index-children)
+        patch-impl (o/get context "patch-fn")]
+    ;; comp is nil on first render
+    (if-let [comp (aget children 0)]
+      (do
+        (if-let [dirty-comps (aget render-queue m/index-render-queue-offset)]
+          (do
+            (aset dirty-comps 0 props)
+            (aset dirty-comps 1 patch-fn)
+            (aset dirty-comps 2 comp))
+          (aset render-queue m/index-render-queue-offset #js [props patch-fn comp]))
+        (aset (aget comp m/index-comp-data) m/index-comp-data-dirty-flag true)
+        (when-not (aget render-queue m/index-render-queue-dirty-flag)
+          (aset render-queue m/index-render-queue-dirty-flag true)
+          (m/process-render-queue context render-queue)))
+      (do
+        (patch-impl render-queue vnode nil patch-fn props false)
+        (m/process-post-render-hooks render-queue)))))
+
+(defn patch-sync
+  "Patch a vtree using component. The optional third argument is the component props."
+  ([vtree component]
+   (patch-root-impl-sync context-javafx vtree component m/no-props-flag))
+  ([vtree component props]
+   (patch-root-impl-sync context-javafx vtree component props)))
 
 (defn patch
   "Patch a vtree using component. The optional third argument is the component props."
   ([vtree component]
-   (patch-root-impl vtree component m/no-props-flag))
+   (patch-root-impl context-javafx vtree component m/no-props-flag))
   ([vtree component props]
-   (patch-root-impl vtree component props)))
+   (patch-root-impl context-javafx vtree component props)))
 
-(defn scene [vtree & {:keys [width height depth-buffer anti-aliasing fill]}]
-  (let [vnode (.-vnode vtree)
-        root (aget vnode m/index-node)
-        s (Scene. root width height depth-buffer anti-aliasing)]
-    (when (some? fill)
-      (.setFill s fill))
+(defn- seqable->observable-list [s]
+  (if (seqable? s)
+    (let [o-list (.observableArrayList FXCollections)]
+      (loop [s (seq s)]
+        (when-let [f (first s)]
+          (.add o-list f)
+          (recur (next s))))
+      o-list)
     s))
 
+(defn- list-cell-factory [obj vtree f item empty]
+  (if empty
+    (do (.setText obj nil)
+        (.setGraphic obj nil))
+    (do (.setText obj nil)
+        (patch-sync vtree f item))))
+
+(defn- callback-factory [obj f param]
+  ;; ListCell cannot be initialized before the toolkit is initialized
+  (let [ListCell (js/Java.type "muancefx.ListCell")
+        vtree (vtree)
+        _ (aset (m/get-render-queue vtree) m/index-render-queue-async false)
+        list-cell (ListCell. list-cell-factory vtree f)]
+    (m/post-render-internal vtree (fn [] (.setGraphic list-cell (.getRoot (scene vtree)))))
+    list-cell))
+
+(defn- fn->factory [f]
+  (Callback. callback-factory f))
+
+(defn set-stage-vtree [stage vtree]
+  (if (nil? vtree)
+    (do
+      (.setScene stage (scene vtree))
+      (vreset! root nil))
+    (do
+      (.setScene stage (scene vtree))
+      (vreset! root vtree))))
+
+
+;; No sourcemap for stacktrace from exceptions from other threads 
